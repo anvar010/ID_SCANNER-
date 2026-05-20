@@ -590,6 +590,8 @@ export default function EidScanner() {
             </div>
             <p className="tip">
               <strong>Tips for accurate OCR:</strong>
+              <br />• Hold the card <strong>horizontally (landscape)</strong>{" "}
+              so it fills the frame.
               <br />• Hold the phone <strong>directly above</strong> the
               card (not at an angle).
               <br />• <strong>Fill the frame</strong> — the MRZ text at the
@@ -670,31 +672,6 @@ export default function EidScanner() {
             }
           />
         </div>
-        {fields.docType !== "PASSPORT" && (
-          <>
-            <div className="field">
-              <label>First Name</label>
-              <input
-                value={fields.firstName}
-                onChange={(e) => setField("firstName", e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label>Family Name (MRZ Surname)</label>
-              <input
-                value={fields.surname}
-                onChange={(e) => setField("surname", e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label>Last Name</label>
-              <input
-                value={fields.lastName}
-                onChange={(e) => setField("lastName", e.target.value)}
-              />
-            </div>
-          </>
-        )}
         <div className="field">
           <label>Nationality</label>
           <input
