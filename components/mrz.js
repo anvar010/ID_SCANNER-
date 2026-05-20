@@ -60,7 +60,7 @@ function findEmiratesId(line) {
 }
 
 // If the front of the card was in the photo too, the OCR output contains the
-// person's name in mixed case (e.g. "Anvarsha Kollamparambil Navas Navas").
+// person's name in mixed case (e.g. "Name Familyname Lastname Lastname").
 // MRZ truncates to 30 chars, so this is the only way to recover the full name.
 function findFullNameFromFront(rawText, mrzSurname) {
   if (!mrzSurname) return "";
