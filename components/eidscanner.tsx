@@ -281,7 +281,7 @@ export default function EidScanner() {
     try {
       setCameraOpen(true);
       setStatus(
-        "Fit the entire card inside the frame (back of Emirates ID, or passport photo page) and tap Capture.",
+        "Position the MRZ zone (back of Emirates ID, or passport photo page) inside the frame and tap Capture.",
       );
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -359,14 +359,10 @@ export default function EidScanner() {
       const vis = wrap
         ? computeVisibleVideoRect(video, wrap)
         : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
-      const cardX = vis.x + vis.w * 0.05;
-      const cardY = vis.y + vis.h * 0.08;
-      const cardW = vis.w * 0.90;
-      const cardH = vis.h * 0.84;
-      const sx = Math.round(cardX);
-      const sw = Math.round(cardW);
-      const sy = Math.round(cardY + cardH * 0.74);
-      const sh = Math.round(cardH * 0.26);
+      const sx = Math.round(vis.x + vis.w * 0.06);
+      const sw = Math.round(vis.w * 0.88);
+      const sy = Math.round(vis.y + vis.h * 0.58);
+      const sh = Math.round(vis.h * 0.22);
       const targetW = 1000;
       const scale = Math.min(1, targetW / sw);
       const cw = Math.max(1, Math.round(sw * scale));
@@ -508,62 +504,49 @@ export default function EidScanner() {
       ? computeVisibleVideoRect(video, wrap)
       : { x: 0, y: 0, w: Vw, h: Vh };
 
-    const cardX = vis.x + vis.w * 0.05;
-    const cardY = vis.y + vis.h * 0.08;
-    const cardW = vis.w * 0.90;
-    const cardH = vis.h * 0.84;
-
-    const cardCanvas = canvasRef.current || document.createElement("canvas");
-    cardCanvas.width = Math.round(cardW);
-    cardCanvas.height = Math.round(cardH);
-    const cardCtx = cardCanvas.getContext("2d")!;
-    cardCtx.drawImage(
-      video,
-      cardX,
-      cardY,
-      cardW,
-      cardH,
-      0,
-      0,
-      cardW,
-      cardH,
+    const visCanvas = canvasRef.current || document.createElement("canvas");
+    visCanvas.width = Math.round(vis.w);
+    visCanvas.height = Math.round(vis.h);
+    const visCtx = visCanvas.getContext("2d")!;
+    visCtx.drawImage(video, vis.x, vis.y, vis.w, vis.h, 0, 0, vis.w, vis.h);
+    const visBlob: Blob | null = await new Promise((res) =>
+      visCanvas.toBlob((b) => res(b), "image/jpeg", 0.98),
     );
-    const cardBlob: Blob | null = await new Promise((res) =>
-      cardCanvas.toBlob((b) => res(b), "image/jpeg", 0.98),
-    );
-    if (!cardBlob) {
+    if (!visBlob) {
       setError("Capture failed. Please try again.");
       return;
     }
 
-    const mrzY = cardH * 0.74;
-    const mrzH = cardH * 0.26;
-    const mrzCanvas = document.createElement("canvas");
-    mrzCanvas.width = Math.round(cardW);
-    mrzCanvas.height = Math.round(mrzH);
-    const mrzCtx = mrzCanvas.getContext("2d")!;
-    mrzCtx.drawImage(
-      cardCanvas,
+    const guideX = vis.w * 0.06;
+    const guideY = vis.h * 0.58;
+    const guideW = vis.w * 0.88;
+    const guideH = vis.h * 0.22;
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = Math.round(guideW);
+    cropCanvas.height = Math.round(guideH);
+    const cropCtx = cropCanvas.getContext("2d")!;
+    cropCtx.drawImage(
+      visCanvas,
+      guideX,
+      guideY,
+      guideW,
+      guideH,
       0,
-      mrzY,
-      cardW,
-      mrzH,
       0,
-      0,
-      cardW,
-      mrzH,
+      guideW,
+      guideH,
     );
-    const mrzBlob: Blob | null = await new Promise((res) =>
-      mrzCanvas.toBlob((b) => res(b as Blob), "image/png"),
+    const cropBlob: Blob | null = await new Promise((res) =>
+      cropCanvas.toBlob((b) => res(b as Blob), "image/png"),
     );
-    if (!mrzBlob) {
+    if (!cropBlob) {
       setError("Capture failed. Please try again.");
       return;
     }
 
-    setPreviewUrl(URL.createObjectURL(cardBlob));
+    setPreviewUrl(URL.createObjectURL(visBlob));
     stopCamera();
-    await runOcrWithFullContext(mrzBlob, cardBlob);
+    await runOcrWithFullContext(cropBlob, visBlob);
   }
 
   return (
@@ -648,7 +631,7 @@ export default function EidScanner() {
                 >
                   {mrzDetected
                     ? "MRZ detected — tap Capture"
-                    : "Fit the whole card inside the box"}
+                    : "Align MRZ inside the box"}
                 </div>
               </div>
             </div>
@@ -663,11 +646,11 @@ export default function EidScanner() {
             <p className="tip">
               <strong>Tips for accurate OCR:</strong>
               <br />• Hold the card <strong>horizontally (landscape)</strong>{" "}
-              so the <strong>whole card</strong> fits inside the box.
+              so it fills the frame.
               <br />• Hold the phone <strong>directly above</strong> the
               card (not at an angle).
-              <br />• <strong>Fill the frame</strong> — both the printed name
-              and the MRZ at the bottom should be clearly visible.
+              <br />• <strong>Fill the frame</strong> — the MRZ text at the
+              bottom should be as large as possible.
               <br />• Good even lighting, no glare or shadows on the MRZ.
               <br />• Wait for the camera to focus before tapping Capture.
             </p>
