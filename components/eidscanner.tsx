@@ -355,12 +355,14 @@ export default function EidScanner() {
     if (!video || !video.videoWidth || !video.videoHeight) return;
     detectingRef.current = true;
     try {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-      const sx = Math.round(w * 0.06);
-      const sw = Math.round(w * 0.88);
-      const sy = Math.round(h * 0.58);
-      const sh = Math.round(h * 0.22);
+      const wrap = video.parentElement as HTMLElement | null;
+      const vis = wrap
+        ? computeVisibleVideoRect(video, wrap)
+        : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+      const sx = Math.round(vis.x + vis.w * 0.06);
+      const sw = Math.round(vis.w * 0.88);
+      const sy = Math.round(vis.y + vis.h * 0.58);
+      const sh = Math.round(vis.h * 0.22);
       const targetW = 1000;
       const scale = Math.min(1, targetW / sw);
       const cw = Math.max(1, Math.round(sw * scale));
@@ -467,31 +469,84 @@ export default function EidScanner() {
     }
   }
 
+  function computeVisibleVideoRect(
+    video: HTMLVideoElement,
+    wrap: HTMLElement,
+  ) {
+    const Vw = video.videoWidth;
+    const Vh = video.videoHeight;
+    const rect = wrap.getBoundingClientRect();
+    const Wd = rect.width;
+    const Hd = rect.height;
+    const videoAspect = Vw / Vh;
+    const wrapAspect = Wd / Hd;
+    if (wrapAspect > videoAspect) {
+      const visW = Vw;
+      const visH = Vw / wrapAspect;
+      return { x: 0, y: (Vh - visH) / 2, w: visW, h: visH };
+    }
+    const visH = Vh;
+    const visW = Vh * wrapAspect;
+    return { x: (Vw - visW) / 2, y: 0, w: visW, h: visH };
+  }
+
   async function capture() {
     const video = videoRef.current;
     if (!video) return;
-    const w = video.videoWidth;
-    const h = video.videoHeight;
-    if (!w || !h) {
+    const Vw = video.videoWidth;
+    const Vh = video.videoHeight;
+    if (!Vw || !Vh) {
       setError("Camera not ready yet.");
       return;
     }
-    const canvas = canvasRef.current || document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(video, 0, 0, w, h);
-    const fullBlob: Blob | null = await new Promise((res) =>
-      canvas.toBlob((b) => res(b), "image/jpeg", 0.98),
+    const wrap = video.parentElement as HTMLElement | null;
+    const vis = wrap
+      ? computeVisibleVideoRect(video, wrap)
+      : { x: 0, y: 0, w: Vw, h: Vh };
+
+    const visCanvas = canvasRef.current || document.createElement("canvas");
+    visCanvas.width = Math.round(vis.w);
+    visCanvas.height = Math.round(vis.h);
+    const visCtx = visCanvas.getContext("2d")!;
+    visCtx.drawImage(video, vis.x, vis.y, vis.w, vis.h, 0, 0, vis.w, vis.h);
+    const visBlob: Blob | null = await new Promise((res) =>
+      visCanvas.toBlob((b) => res(b), "image/jpeg", 0.98),
     );
-    if (!fullBlob) {
+    if (!visBlob) {
       setError("Capture failed. Please try again.");
       return;
     }
-    const cropped = await cropToGuide(fullBlob);
-    setPreviewUrl(URL.createObjectURL(cropped));
+
+    const guideX = vis.w * 0.06;
+    const guideY = vis.h * 0.58;
+    const guideW = vis.w * 0.88;
+    const guideH = vis.h * 0.22;
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = Math.round(guideW);
+    cropCanvas.height = Math.round(guideH);
+    const cropCtx = cropCanvas.getContext("2d")!;
+    cropCtx.drawImage(
+      visCanvas,
+      guideX,
+      guideY,
+      guideW,
+      guideH,
+      0,
+      0,
+      guideW,
+      guideH,
+    );
+    const cropBlob: Blob | null = await new Promise((res) =>
+      cropCanvas.toBlob((b) => res(b as Blob), "image/png"),
+    );
+    if (!cropBlob) {
+      setError("Capture failed. Please try again.");
+      return;
+    }
+
+    setPreviewUrl(URL.createObjectURL(visBlob));
     stopCamera();
-    await runOcrWithFullContext(cropped, fullBlob);
+    await runOcrWithFullContext(cropBlob, visBlob);
   }
 
   return (
