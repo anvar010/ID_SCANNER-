@@ -131,12 +131,19 @@ function mapResponseToFields(resp: any): {
   const firstName = pick(data, ["firstName", "givenName", "first_name"]);
   const middleName = pick(data, ["middleName", "middle_name"]);
   const lastName = pick(data, ["lastName", "surname", "last_name"]);
-  const apiFullName = pick(data, [
-    "fullName",
-    "name",
-    "full_name",
-    "documentHolder",
-  ]);
+  // Prefer the front-visual fullName (printed area) when present. Falls back
+  // to MRZ-derived value only if no visual one was returned.
+  const visualFullName = pickFromSide(
+    data,
+    ["fullName", "name", "full_name", "documentHolder"],
+    [
+      { source: "visual", index: 0 },
+      { source: "visual" },
+    ],
+  );
+  const apiFullName =
+    visualFullName ||
+    pick(data, ["fullName", "name", "full_name", "documentHolder"]);
   // Personal ID (e.g. UAE 784-…) is on the visual front under personalNumber.
   // documentNumber typically holds the card serial. Prefer the personal one.
   const personalNumber = pick(data, [
@@ -199,12 +206,12 @@ function mapResponseToFields(resp: any): {
     "expirationDate",
     "expiration_date",
   ]);
-  // Printed-card name order on Emirates IDs is first + last + middle.
-  // IDAnalyzer's MRZ-derived `fullName` returns first + middle + last,
-  // so prefer the reconstructed printed order when we have the parts.
+  // Prefer the visual (front-printed) fullName the API recovered. Fall back
+  // to a reconstructed first + last + middle (printed-card order on Emirates
+  // IDs) when only MRZ components are available.
   const printedOrder =
     [firstName, lastName, middleName].filter(Boolean).join(" ") || "";
-  const fullName = printedOrder || apiFullName;
+  const fullName = visualFullName || printedOrder || apiFullName;
   return {
     fields: {
       docType:
@@ -237,6 +244,7 @@ export default function IdScannerWithApi() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cameraWrapRef = useRef<HTMLDivElement | null>(null);
 
   const [frontBlob, setFrontBlob] = useState<Blob | null>(null);
   const [backBlob, setBackBlob] = useState<Blob | null>(null);
@@ -380,10 +388,37 @@ export default function IdScannerWithApi() {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+      setTimeout(() => {
+        cameraWrapRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }, 50);
     } catch {
       setCameraSide(null);
       setError("Camera permission denied or unavailable.");
     }
+  }
+
+  function computeVisibleVideoRect(
+    video: HTMLVideoElement,
+    wrap: HTMLElement,
+  ) {
+    const Vw = video.videoWidth;
+    const Vh = video.videoHeight;
+    const rect = wrap.getBoundingClientRect();
+    const Wd = rect.width;
+    const Hd = rect.height;
+    const videoAspect = Vw / Vh;
+    const wrapAspect = Wd / Hd;
+    if (wrapAspect > videoAspect) {
+      const visW = Vw;
+      const visH = Vw / wrapAspect;
+      return { x: 0, y: (Vh - visH) / 2, w: visW, h: visH };
+    }
+    const visH = Vh;
+    const visW = Vh * wrapAspect;
+    return { x: (Vw - visW) / 2, y: 0, w: visW, h: visH };
   }
 
   function stopCamera() {
@@ -398,17 +433,21 @@ export default function IdScannerWithApi() {
     const side = cameraSide;
     const video = videoRef.current;
     if (!video || !side) return;
-    const w = video.videoWidth;
-    const h = video.videoHeight;
-    if (!w || !h) {
+    const Vw = video.videoWidth;
+    const Vh = video.videoHeight;
+    if (!Vw || !Vh) {
       setError("Camera not ready yet.");
       return;
     }
+    const wrap = video.parentElement as HTMLElement | null;
+    const vis = wrap
+      ? computeVisibleVideoRect(video, wrap)
+      : { x: 0, y: 0, w: Vw, h: Vh };
     const canvas = canvasRef.current || document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = Math.round(vis.w);
+    canvas.height = Math.round(vis.h);
     const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(video, 0, 0, w, h);
+    ctx.drawImage(video, vis.x, vis.y, vis.w, vis.h, 0, 0, vis.w, vis.h);
     const blob: Blob | null = await new Promise((res) =>
       canvas.toBlob((b) => res(b), "image/jpeg", 0.95),
     );
@@ -560,7 +599,7 @@ export default function IdScannerWithApi() {
 
         {cameraSide && (
           <div style={{ marginTop: 12 }}>
-            <div className="camera-wrap">
+            <div className="camera-wrap" ref={cameraWrapRef}>
               <video
                 ref={videoRef}
                 className="video"
