@@ -69,6 +69,31 @@ function pick(obj: any, keys: string[]): string {
   return "";
 }
 
+// Prefer a specific (source, index) over confidence — useful when the same
+// key holds both holder-nationality (front, index 0) and issuing-country
+// (back, index 1) values for Emirates IDs.
+function pickFromSide(
+  obj: any,
+  keys: string[],
+  prefer: { source?: string; index?: number }[],
+): string {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (!Array.isArray(v)) continue;
+    for (const want of prefer) {
+      const hit = v.find(
+        (e: any) =>
+          e &&
+          (want.source == null || e.source === want.source) &&
+          (want.index == null || e.index === want.index) &&
+          e.value,
+      );
+      if (hit) return String(hit.value).trim();
+    }
+  }
+  return "";
+}
+
 function mapResponseToFields(resp: any): {
   fields: ApiFields;
   raw: string;
@@ -76,40 +101,75 @@ function mapResponseToFields(resp: any): {
 } {
   const data = resp?.data || resp?.result || resp || {};
   const docType = pick(data, [
-    "documentType",
     "documentName",
+    "documentType",
     "type",
     "document_type",
     "docType",
   ]);
-  const fullName = pick(data, [
+  const firstName = pick(data, ["firstName", "givenName", "first_name"]);
+  const middleName = pick(data, ["middleName", "middle_name"]);
+  const lastName = pick(data, ["lastName", "surname", "last_name"]);
+  const apiFullName = pick(data, [
     "fullName",
     "name",
     "full_name",
     "documentHolder",
   ]);
-  const firstName = pick(data, ["firstName", "givenName", "first_name"]);
-  const lastName = pick(data, ["lastName", "surname", "last_name"]);
-  const documentNumber = pick(data, [
+  // Personal ID (e.g. UAE 784-…) is on the visual front under personalNumber.
+  // documentNumber typically holds the card serial. Prefer the personal one.
+  const personalNumber = pick(data, [
+    "personalNumber",
+    "personalIdNumber",
+    "national_id",
+  ]);
+  const cardSerial = pick(data, [
     "documentNumber",
     "document_number",
     "idNumber",
     "passportNumber",
     "number",
   ]);
-  const nationality = pick(data, [
-    "nationalityFull",
-    "nationality",
-    "nationality_full",
-  ]);
-  const issuingCountry = pick(data, [
-    "issuerOrgFull",
-    "issuerOrg_full",
-    "issuingCountry",
-    "issuing_country",
-    "issuerOrg",
-    "country",
-  ]);
+  const documentNumber = personalNumber || cardSerial;
+  // Holder's nationality lives on the FRONT (index 0). The same key may also
+  // carry the issuing country from the BACK (index 1). Prefer front-visual,
+  // then MRZ, then anything else.
+  const nationality =
+    pickFromSide(
+      data,
+      ["nationalityFull", "nationality", "nationality_full"],
+      [
+        { source: "visual", index: 0 },
+        { source: "MRZ" },
+      ],
+    ) || pick(data, ["nationalityFull", "nationality", "nationality_full"]);
+  // Issuing country is the back-side country value.
+  const issuingCountry =
+    pickFromSide(
+      data,
+      [
+        "countryFull",
+        "issuerOrgFull",
+        "issuerOrg_full",
+        "issuingCountry",
+        "issuing_country",
+        "issuerOrg",
+        "country",
+      ],
+      [
+        { source: "visual", index: 1 },
+        { source: "visual" },
+      ],
+    ) ||
+    pick(data, [
+      "countryFull",
+      "issuerOrgFull",
+      "issuerOrg_full",
+      "issuingCountry",
+      "issuing_country",
+      "issuerOrg",
+      "country",
+    ]);
   const sex = pick(data, ["sex", "gender"]);
   const dateOfBirth = pick(data, ["dob", "dateOfBirth", "date_of_birth"]);
   const dateOfExpiry = pick(data, [
@@ -118,13 +178,19 @@ function mapResponseToFields(resp: any): {
     "expirationDate",
     "expiration_date",
   ]);
+  // Printed-card name order on Emirates IDs is first + last + middle.
+  // IDAnalyzer's MRZ-derived `fullName` returns first + middle + last,
+  // so prefer the reconstructed printed order when we have the parts.
+  const printedOrder =
+    [firstName, lastName, middleName].filter(Boolean).join(" ") || "";
+  const fullName = printedOrder || apiFullName;
   return {
     fields: {
       docType:
         docType ||
-        (documentNumber?.startsWith("784") ? "EMIRATES_ID" : ""),
+        (documentNumber?.startsWith("784") ? "Resident Identity Card" : ""),
       documentNumber,
-      fullName: fullName || [firstName, lastName].filter(Boolean).join(" "),
+      fullName,
       firstName,
       lastName,
       nationality,
