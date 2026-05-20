@@ -34,6 +34,11 @@ h1 { font-size: 24px; margin: 0 0 4px; }
   border: 2px solid #1f6feb;
   border-radius: 8px;
   box-shadow: 0 0 0 2px rgba(255,255,255,0.4);
+  transition: border-color .15s, box-shadow .15s;
+}
+.camera-guide .frame.detected {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.4), 0 0 18px rgba(22,163,74,0.6);
 }
 .camera-guide .frame-label {
   position: absolute;
@@ -47,6 +52,10 @@ h1 { font-size: 24px; margin: 0 0 4px; }
   letter-spacing: 0.05em;
   font-weight: 600;
   white-space: nowrap;
+  transition: background .15s;
+}
+.camera-guide .frame-label.detected {
+  background: rgba(22,163,74,0.95);
 }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .field label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: .04em; }

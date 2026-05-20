@@ -25,6 +25,9 @@ export default function Page() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const canvasRef = useRef(null);
+  const detectWorkerRef = useRef(null);
+  const detectIntervalRef = useRef(null);
+  const detectingRef = useRef(false);
 
   const [fields, setFields] = useState(initialFields);
   const [rawMrz, setRawMrz] = useState("");
@@ -35,6 +38,7 @@ export default function Page() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [mrzDetected, setMrzDetected] = useState(false);
 
   useEffect(() => {
     return () => stopCamera();
@@ -269,6 +273,7 @@ export default function Page() {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+      startMrzDetectionLoop();
     } catch (e) {
       setCameraOpen(false);
       setError("Camera permission denied or unavailable.");
@@ -276,11 +281,88 @@ export default function Page() {
   }
 
   function stopCamera() {
+    if (detectIntervalRef.current) {
+      clearInterval(detectIntervalRef.current);
+      detectIntervalRef.current = null;
+    }
+    if (detectWorkerRef.current) {
+      try { detectWorkerRef.current.terminate(); } catch {}
+      detectWorkerRef.current = null;
+    }
+    detectingRef.current = false;
+    setMrzDetected(false);
     const s = streamRef.current;
     if (s) s.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraOpen(false);
+  }
+
+  async function ensureDetectWorker() {
+    if (detectWorkerRef.current) return detectWorkerRef.current;
+    const { createWorker, PSM } = await import("tesseract.js");
+    const worker = await createWorker("eng", 1);
+    await worker.setParameters({
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
+      tessedit_pageseg_mode: PSM ? PSM.SINGLE_BLOCK : "6",
+      preserve_interword_spaces: "1",
+    });
+    detectWorkerRef.current = worker;
+    return worker;
+  }
+
+  function startMrzDetectionLoop() {
+    if (detectIntervalRef.current) clearInterval(detectIntervalRef.current);
+    detectIntervalRef.current = setInterval(() => {
+      quickDetectMrzFromVideo();
+    }, 1500);
+  }
+
+  // Lightweight OCR pass on the guide-region of the live video.
+  // If it finds MRZ-like lines ('<<' marker, or 2+ long uppercase runs),
+  // turn the guide green so the user knows to capture.
+  async function quickDetectMrzFromVideo() {
+    if (detectingRef.current) return;
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return;
+    detectingRef.current = true;
+    try {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      const sx = Math.round(w * 0.06);
+      const sw = Math.round(w * 0.88);
+      const sy = Math.round(h * 0.58);
+      const sh = Math.round(h * 0.22);
+      const targetW = 1000;
+      const scale = Math.min(1, targetW / sw);
+      const cw = Math.max(1, Math.round(sw * scale));
+      const ch = Math.max(1, Math.round(sh * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch);
+      const blob = await new Promise((res) =>
+        canvas.toBlob((b) => res(b), "image/png"),
+      );
+      if (!blob) return;
+      const worker = await ensureDetectWorker();
+      // If the camera was closed while we were awaiting, bail out.
+      if (!streamRef.current) return;
+      const { data } = await worker.recognize(blob);
+      const text = (data?.text || "").toUpperCase();
+      const norm = text
+        .split(/\r?\n/)
+        .map((s) => s.replace(/[^A-Z0-9<]/g, ""));
+      const longLines = norm.filter((l) => l.length >= 24);
+      const hasMrz =
+        longLines.some((l) => l.includes("<<")) || longLines.length >= 2;
+      setMrzDetected(hasMrz);
+    } catch {
+      // Detection is best-effort; ignore failures.
+    } finally {
+      detectingRef.current = false;
+    }
   }
 
   // Crop a captured blob to the same region the on-screen guide rectangle
@@ -312,25 +394,11 @@ export default function Page() {
   async function capture() {
     const video = videoRef.current;
     if (!video) return;
-
-    // Prefer ImageCapture.takePhoto() — full sensor resolution, not a
-    // downscaled video frame. Falls back to drawing the video frame.
-    try {
-      const track = streamRef.current?.getVideoTracks?.()[0];
-      if (track && typeof window !== "undefined" && "ImageCapture" in window) {
-        const ic = new window.ImageCapture(track);
-        const raw = await ic.takePhoto();
-        const cropped = await cropToGuide(raw);
-        const url = URL.createObjectURL(cropped);
-        setPreviewUrl(url);
-        stopCamera();
-        await runOcr(cropped);
-        return;
-      }
-    } catch (e) {
-      // fall through to frame capture
-    }
-
+    // Capture from the live video frame. This matches the on-screen preview
+    // exactly, so the guide-rectangle crop ratios are reliable. (We used to
+    // call ImageCapture.takePhoto() here, but the resulting photo's aspect
+    // ratio often differed from the preview — on phones in portrait the
+    // crop landed outside the MRZ.)
     const w = video.videoWidth;
     const h = video.videoHeight;
     if (!w || !h) {
@@ -342,18 +410,23 @@ export default function Page() {
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0, w, h);
-    canvas.toBlob(
-      async (blob) => {
-        if (!blob) return;
-        const cropped = await cropToGuide(blob);
-        const url = URL.createObjectURL(cropped);
-        setPreviewUrl(url);
-        stopCamera();
-        runOcr(cropped);
-      },
-      "image/jpeg",
-      0.98,
+    const fullBlob = await new Promise((res) =>
+      canvas.toBlob((b) => res(b), "image/jpeg", 0.98),
     );
+    if (!fullBlob) {
+      setError("Capture failed. Please try again.");
+      return;
+    }
+    const cropped = await cropToGuide(fullBlob);
+    setPreviewUrl(URL.createObjectURL(cropped));
+    stopCamera();
+    const ok = await runOcr(cropped, { returnsSuccess: true });
+    if (!ok) {
+      // Crop may have missed the MRZ — retry OCR on the full frame.
+      setStatus("Retrying with full frame…");
+      setPreviewUrl(URL.createObjectURL(fullBlob));
+      await runOcr(fullBlob);
+    }
   }
 
   return (
@@ -413,8 +486,10 @@ export default function Page() {
               <div className="camera-guide" aria-hidden="true">
                 <div className="side-l" />
                 <div className="side-r" />
-                <div className="frame" />
-                <div className="frame-label">Align MRZ inside the box</div>
+                <div className={`frame${mrzDetected ? " detected" : ""}`} />
+                <div className={`frame-label${mrzDetected ? " detected" : ""}`}>
+                  {mrzDetected ? "MRZ detected — tap Capture" : "Align MRZ inside the box"}
+                </div>
               </div>
             </div>
             <div className="btn-row" style={{ marginTop: 10 }}>
