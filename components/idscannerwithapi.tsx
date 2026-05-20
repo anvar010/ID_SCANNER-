@@ -1,6 +1,27 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+// Reuse the Tesseract scanner's front-printed-name extractor so we can
+// recover the full printed name (e.g. "Anvarsha Kollamparambil Navas
+// Muhammed") when IDAnalyzer only returns the MRZ-truncated form.
+import { findFullNameFromFront } from "./mrz";
+
+async function ocrFront(blob: Blob): Promise<string> {
+  const { createWorker, PSM }: any = await import("tesseract.js");
+  const worker = await createWorker("eng", 1);
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789<:/-. ",
+      tessedit_pageseg_mode: PSM ? PSM.SINGLE_BLOCK : "6",
+      preserve_interword_spaces: "1",
+    });
+    const { data } = await worker.recognize(blob);
+    return data?.text || "";
+  } finally {
+    await worker.terminate();
+  }
+}
 
 type ApiFields = {
   docType: string;
@@ -299,6 +320,22 @@ export default function IdScannerWithApi() {
       setRawJson(raw);
       setDecision(meta.decision);
       setTransactionId(meta.transactionId);
+
+      // IDAnalyzer's fullName is MRZ-truncated for Emirates IDs. Re-OCR the
+      // front locally and recover the full printed name using the surname.
+      if (frontBlob && mapped.lastName) {
+        try {
+          setStatus("Reading printed name from front…");
+          const frontText = await ocrFront(frontBlob);
+          const printed = findFullNameFromFront(frontText, mapped.lastName);
+          if (printed) {
+            setFields((f) => ({ ...f, fullName: printed }));
+          }
+        } catch {
+          // best-effort; keep the API-derived name
+        }
+      }
+
       setStatus("Done.");
     } catch (e: any) {
       setError(e?.message || "Request failed.");
