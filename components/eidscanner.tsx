@@ -562,6 +562,10 @@ export default function EidScanner() {
             <strong>Emirates ID</strong> (back) or a{" "}
             <strong>Passport</strong> (photo page). The document type is
             detected automatically.
+            <br />
+            <a href="/scan-api" style={{ color: "#1f6feb" }}>
+              Try the IDAnalyzer API version →
+            </a>
           </p>
         </div>
       </header>
