@@ -419,6 +419,7 @@ export default function Home() {
 
       if (patientData) {
         Object.entries(patientData).forEach(([key, value]) => {
+          // Send signature explicitly below without the 'patient_' prefix
           if (value !== undefined && value !== null && key !== "signature") {
             // Send 'cr' without prefix so backend receives it as just 'cr'
             const fieldName = key === "cr" ? "cr" : `patient_${key}`;
@@ -427,30 +428,15 @@ export default function Home() {
         });
       }
 
-      // Convert base64 data URLs to proper File/Blob objects
-      // so the backend receives them as actual file uploads
-      const dataUrlToBlob = (dataUrl: string): Blob => {
-        const [header, base64] = dataUrl.split(",");
-        const mime = header.match(/:(.*?);/)?.[1] || "image/png";
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        return new Blob([bytes], { type: mime });
-      };
-
+      // Send images and signature as raw base64 data URLs
       if (frontImage) {
-        const frontBlob = dataUrlToBlob(frontImage);
-        payload.append("frontImage", frontBlob, "front-id.png");
+        payload.append("frontImage", frontImage);
       }
       if (backImage) {
-        const backBlob = dataUrlToBlob(backImage);
-        payload.append("backImage", backBlob, "back-id.png");
+        payload.append("backImage", backImage);
       }
       if (patientData.signature) {
-        const signatureBlob = dataUrlToBlob(patientData.signature);
-        payload.append("signature", signatureBlob, "signature.png");
+        payload.append("signature", patientData.signature);
       }
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL;
